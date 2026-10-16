@@ -1,0 +1,4 @@
+# Build output (the MSI is published as a release asset)
+obj/
+dist/
+*.log
