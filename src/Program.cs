@@ -10,8 +10,8 @@ using WinForms = System.Windows.Forms;
 [assembly: AssemblyTitle("Outlook Notifier")]
 [assembly: AssemblyProduct("Outlook Notifier")]
 [assembly: AssemblyCompany("Outlook Notifier")]
-[assembly: AssemblyVersion("1.3.0.0")]
-[assembly: AssemblyFileVersion("1.3.0.0")]
+[assembly: AssemblyVersion("1.3.1.0")]
+[assembly: AssemblyFileVersion("1.3.1.0")]
 
 namespace OutlookNotifier
 {
@@ -134,7 +134,7 @@ namespace OutlookNotifier
             // again once the reminder interval has passed (so closing it on purpose is respected for a while).
             void KeepOutlookOpen()
             {
-                bool running = Process.GetProcessesByName("OUTLOOK").Length > 0;
+                bool running = OutlookWatcher.IsRunning("OUTLOOK");
                 bool firstLook = !outlookChecked;
                 outlookChecked = true;
                 if (running) { outlookClosedAt = null; return; }

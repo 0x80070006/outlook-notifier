@@ -111,8 +111,8 @@ namespace OutlookNotifier
             DateTime deadline = DateTime.UtcNow + timeout;
             while (DateTime.UtcNow < deadline)
             {
-                var pids = new System.Collections.Generic.HashSet<uint>(
-                    System.Linq.Enumerable.Select(Process.GetProcessesByName("OUTLOOK"), p => (uint)p.Id));
+                var pids = new System.Collections.Generic.HashSet<uint>();
+                foreach (var p in Process.GetProcessesByName("OUTLOOK")) { pids.Add((uint)p.Id); p.Dispose(); }
                 IntPtr main = IntPtr.Zero;
                 EnumWindows((h, l) =>
                 {

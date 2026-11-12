@@ -63,7 +63,10 @@ namespace OutlookNotifier
         Thread thread;
         object outlook;
         bool primed;
+        object mapi;              // Outlook namespace and inbox, kept between polls
+        object inbox;
         string lastSignature;
+        string lastFingerprint;   // item count | unread count | newest item, at the last scan
         MailInfo cachedLatest;
         MeetingInfo nextMeeting;
         int otherMeetings;
@@ -106,18 +109,46 @@ namespace OutlookNotifier
                 catch (InvalidOperationException) { break; }
                 if (work.IsCompleted) break;
                 Safe(Poll);
+                FreeComWrappers();
                 nextPoll = DateTime.UtcNow.AddMilliseconds(PollMs);
             }
-            outlook = null;
+            Disconnect();
+        }
+
+        // Every Outlook object reached through COM leaves a wrapper and a native proxy in this
+        // process. They weigh almost nothing on the managed heap, so the GC would hardly ever run
+        // on its own and the native memory kept growing (several GB after a day or two).
+        static void FreeComWrappers()
+        {
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
         }
 
         dynamic Outlook()
         {
             if (outlook != null) return outlook;
-            if (Process.GetProcessesByName("OUTLOOK").Length == 0) return null;
+            if (!IsRunning("OUTLOOK")) return null;
             try { outlook = Marshal.GetActiveObject("Outlook.Application"); }
             catch { outlook = null; }
             return outlook;
+        }
+
+        public static bool IsRunning(string processName)
+        {
+            Process[] found = Process.GetProcessesByName(processName);
+            foreach (var p in found) p.Dispose();
+            return found.Length > 0;
+        }
+
+        void Disconnect()
+        {
+            Release(inbox);
+            Release(mapi);
+            inbox = null;
+            mapi = null;
+            outlook = null;
+            lastFingerprint = null;
         }
 
         void Poll()
@@ -128,22 +159,44 @@ namespace OutlookNotifier
                 Publish(new OutlookState { Connected = false }, false, false);
                 return;
             }
+            if (mapi == null) mapi = ol.GetNamespace("MAPI");
+            if (inbox == null) inbox = ((dynamic)mapi).GetDefaultFolder(olFolderInbox);
+            dynamic box = inbox;
 
-            dynamic ns = ol.GetNamespace("MAPI");
-            dynamic inbox = ns.GetDefaultFolder(olFolderInbox);
-            int unread = inbox.UnReadItemCount;
-            bool arrived = ScanForNewMail(inbox);
-            MailInfo latest = unread > 0 ? FindLatestUnread(inbox) : null;
-            Release(inbox);
+            // Cheap fingerprint first: the inbox is only scanned again when it actually changed.
+            int unread = box.UnReadItemCount;
+            dynamic items = box.Items;
+            bool arrived = false;
+            MailInfo latest = cachedLatest;
+            try
+            {
+                int total = items.Count;
+                items.Sort("[ReceivedTime]", true);
+                string newestId = "";
+                dynamic newest = items.GetFirst();
+                if (newest != null)
+                {
+                    try { newestId = newest.EntryID; }
+                    finally { Release(newest); }
+                }
+                string fingerprint = total + "|" + unread + "|" + newestId;
+                if (fingerprint != lastFingerprint)
+                {
+                    lastFingerprint = fingerprint;
+                    arrived = ScanForNewMail(items);
+                    latest = unread > 0 ? FindLatestUnread(box) : null;
+                    cachedLatest = latest;
+                }
+            }
+            finally { Release(items); }
 
             bool meetingsRefreshed = false;
             if (arrived || DateTime.UtcNow >= nextMeetingRefresh)
             {
-                RefreshMeetings(ns);
+                RefreshMeetings(mapi);
                 nextMeetingRefresh = DateTime.UtcNow.AddMilliseconds(MeetingRefreshMs);
                 meetingsRefreshed = true;
             }
-            Release(ns);
 
             var state = new OutlookState
             {
@@ -164,12 +217,11 @@ namespace OutlookNotifier
             if (StateChanged != null) StateChanged(state, arrived);
         }
 
-        // True when an unread message appeared among the most recent inbox items since the last poll.
-        bool ScanForNewMail(dynamic inbox)
+        // True when an unread message appeared among the most recent inbox items since the last scan.
+        // `items` is the inbox collection already sorted newest first.
+        bool ScanForNewMail(dynamic items)
         {
             bool arrived = false;
-            dynamic items = inbox.Items;
-            items.Sort("[ReceivedTime]", true);
             dynamic item = items.GetFirst();
             for (int i = 0; item != null && i < ScanDepth; i++)
             {
@@ -185,7 +237,6 @@ namespace OutlookNotifier
                 item = items.GetNext();
             }
             Release(item);
-            Release(items);
             primed = true;
             return arrived;
         }
@@ -217,7 +268,6 @@ namespace OutlookNotifier
             }
             Release(items);
             Release(all);
-            cachedLatest = result;
             return result;
         }
 
@@ -309,7 +359,9 @@ namespace OutlookNotifier
                 return;
             }
 
-            dynamic folder = ol.GetNamespace("MAPI").GetDefaultFolder(folderId);
+            dynamic ns = ol.GetNamespace("MAPI");
+            dynamic folder = ns.GetDefaultFolder(folderId);
+            Release(ns);
             dynamic explorer = ol.ActiveExplorer();
             if (explorer == null)
             {
@@ -335,7 +387,7 @@ namespace OutlookNotifier
                 if (com == null || com.ErrorCode != RPC_E_CALL_REJECTED)
                 {
                     // Outlook closed or restarted: reconnect on the next poll.
-                    outlook = null;
+                    Disconnect();
                     Log.Write(e.GetType().Name + ": " + e.Message);
                 }
             }
@@ -343,7 +395,8 @@ namespace OutlookNotifier
 
         static void Release(object o)
         {
-            if (o != null && Marshal.IsComObject(o)) Marshal.ReleaseComObject(o);
+            try { if (o != null && Marshal.IsComObject(o)) Marshal.ReleaseComObject(o); }
+            catch { }
         }
     }
 

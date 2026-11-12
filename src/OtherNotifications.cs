@@ -49,7 +49,7 @@ namespace OutlookNotifier
         public static List<Rect> Find()
         {
             var found = new List<Rect>();
-            int self = Process.GetCurrentProcess().Id;
+            uint self = SelfId;
             double screenArea = SystemParameters.PrimaryScreenWidth * SystemParameters.PrimaryScreenHeight * Dpi.Scale * Dpi.Scale;
 
             EnumWindows((hwnd, l) =>
@@ -95,9 +95,31 @@ namespace OutlookNotifier
             var title = new StringBuilder(128);
             GetWindowText(hwnd, title, title.Capacity);
             if (title.ToString().IndexOf("notification", StringComparison.OrdinalIgnoreCase) < 0) return false;
-            try { return ShellProcesses.Contains(Process.GetProcessById((int)pid).ProcessName); }
-            catch { return false; }
+            return ShellProcesses.Contains(ProcessName(pid));
         }
+
+        static readonly uint SelfId = (uint)Process.GetCurrentProcess().Id;
+
+        // Image name without extension. Process.GetProcessById would enumerate every process on
+        // the system, which is far too costly for a scan that runs several times per second.
+        static string ProcessName(uint pid)
+        {
+            IntPtr handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
+            if (handle == IntPtr.Zero) return "";
+            try
+            {
+                var path = new StringBuilder(1024);
+                int size = path.Capacity;
+                if (!QueryFullProcessImageName(handle, 0, path, ref size)) return "";
+                return System.IO.Path.GetFileNameWithoutExtension(path.ToString());
+            }
+            finally { CloseHandle(handle); }
+        }
+
+        const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
+        [DllImport("kernel32.dll")] static extern IntPtr OpenProcess(uint access, bool inherit, uint pid);
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] static extern bool QueryFullProcessImageName(IntPtr process, int flags, StringBuilder name, ref int size);
+        [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
     }
 
     static class Dpi

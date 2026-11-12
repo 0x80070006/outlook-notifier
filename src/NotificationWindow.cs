@@ -49,7 +49,7 @@ namespace OutlookNotifier
         bool visibleBeforeEdit;
         Point dragCursor;
         double dragWidth, dragScale;
-        readonly DispatcherTimer watchOthers = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(400) };
+        readonly DispatcherTimer watchOthers = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(700) };
         readonly DispatcherTimer glide = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(15) };
         Point glideFrom, glideTo;
         DateTime glideStart;
